@@ -25,15 +25,9 @@
 import sys
 import six
 
-# import paths differ in python 2 and python 3
-if six.PY2:
-    from urllib2 import build_opener, HTTPCookieProcessor, Request
-    from urllib import urlencode
-    from cookielib import CookieJar
-elif six.PY3:
-    from urllib.request import build_opener, HTTPCookieProcessor, Request
-    from urllib.parse import urlencode
-    from http.cookiejar import CookieJar
+from urllib.request import build_opener, HTTPCookieProcessor, Request
+from urllib.parse import urlencode
+from http.cookiejar import CookieJar
 import ast
 import re
 import json
@@ -53,6 +47,7 @@ class Nse(AbstractBaseExchange):
         self.headers = self.nse_headers()
         # URL list
         self.get_quote_url = 'https://www.nseindia.com/live_market/dynaContent/live_watch/get_quote/GetQuote.jsp?'
+        self.get_hist_quote_url='https://www.nseindia.com/products/dynaContent/common/productsSymbolMapping.jsp?'
         self.stocks_csv_url = 'http://www.nseindia.com/content/equities/EQUITY_L.csv'
         self.top_gainer_url = 'http://www.nseindia.com/live_market/dynaContent/live_analysis/gainers/niftyGainers1.json'
         self.top_loser_url = 'http://www.nseindia.com/live_market/dynaContent/live_analysis/losers/niftyLosers1.json'
@@ -98,6 +93,33 @@ class Nse(AbstractBaseExchange):
             else:
                 return False
 
+    def get_historic_quote(self, code, date_from, date_to):
+        """
+        gets the quote for given scrip from date_from to date_to
+        :param code:
+        :param date_from:
+        :param date_to:
+        :return: dict or None:
+        :raises: HTTPError, URLError
+        """
+        code = code.upper()
+        if self.is_valid_code(code):
+            url = self.build_url_for_hist_quote(code, date_from, date_to)
+            res = byte_adaptor(self.opener.open(Request(url, None, self.headers)))
+            for line in byte_adaptor(res).read().split('\n'):
+                if re.search("<div id='[^>]*>", line):
+                    data=line.split(">")[1].split(":")
+            if len(data)>1:
+                keys=[d.replace(" ","_").replace('"','') for d in data[0].split(",")]
+                vals=[]
+                D={}
+                for row in data[1:]:
+                    vals=[a.replace(" ","").replace('"','') for a in row.split(",")[0:3]]
+                    vals.extend([float(a.replace(" ","").replace('"','')) for a in data[1].split(",")[3:]])
+                    D[vals[2]] = {key:val for (key, val) in zip(keys, vals)}
+                return D
+        return None
+            
     def get_quote(self, code, as_json=False):
         """
         gets the quote for a given stock code
@@ -238,13 +260,7 @@ class Nse(AbstractBaseExchange):
         Builds right set of headers for requesting http://nseindia.com
         :return: a dict with http headers
         """
-        return {'Accept' : '*/*',
-                'Accept-Language' : 'en-US,en;q=0.5',
-                'Host': 'nseindia.com',
-                'Referer': "https://www.nseindia.com/live_market/dynaContent/live_watch/get_quote/GetQuote.jsp?symbol=INFY&illiquid=0&smeFlag=0&itpFlag=0",
-                'User-Agent' : 'Mozilla/5.0 (Windows NT 6.1; WOW64; rv:28.0) Gecko/20100101 Firefox/28.0',
-                'X-Requested-With': 'XMLHttpRequest'
-            }
+        return {'Accept' : '*/*',           'Accept-Language' : 'en-US,en;q=0.5',                'Host': 'nseindia.com',                'Referer': "https://www.nseindia.com/live_market/dynaContent/live_watch/get_quote/GetQuote.jsp?symbol=INFY&illiquid=0&smeFlag=0&itpFlag=0",                'User-Agent' : 'Mozilla/5.0 (Windows NT 6.1; WOW64; rv:28.0) Gecko/20100101 Firefox/28.0',                'X-Requested-With': 'XMLHttpRequest'            }
 
     def nse_opener(self):
         """
@@ -253,6 +269,27 @@ class Nse(AbstractBaseExchange):
         """
         cj = CookieJar()
         return build_opener(HTTPCookieProcessor(cj))
+
+    def build_url_for_hist_quote(self, code, date_from, date_to):
+        """
+        builds a url which can be requested for a given stock code
+        :param code: string containing stock code.
+        :param date_to:
+        :return: a url object
+        """
+        d={"symbol":code,"segmentLink":3,"symbolCount":None,"series":"ALL",
+           "dateRange":"+","fromDate":date_from,"toDate":date_to,"dataType":"PRICEVOLUMEDELIVERABEL"}
+        if code is not None and type(code) is str:
+            url="https://www.nseindia.com/marketinfo/sym_map/symbolCount.jsp?symbol="+code
+            res=opener(Request(url, None, self.headers))
+            if res is not None:
+                for l in byte_adaptor(res).read().split('\n'):
+                    if re.search(r'^[0-9]+$', l):
+                        d["symbolCount"]=l
+                        return self.get_hist_quote_url + urlencode(d)
+            raise Exception('symbol count not received')
+        else:
+            raise Exception('code must be string')
 
     def build_url_for_quote(self, code):
         """
@@ -309,3 +346,7 @@ class Nse(AbstractBaseExchange):
 # TODO: is_market_open()
 # TODO: concept of portfolio for fetching price in a batch and field which should be captured
 # TODO: Concept of session, just like as in sqlalchemy
+
+#https://www.nseindia.com/products/dynaContent/common/productsSymbolMapping.jsp?symbol=maruti&segmentLink=3&symbolCount=2&series=ALL&dateRange=+&fromDate=12-07-2017&toDate=12-07-2018&dataType=PRICEVOLUMEDELIVERABLE
+#https://www.nseindia.com/products/dynaContent/common/productsSymbolMapping.jsp?symbol=maruti&segmentLink=3&symbolCount=2&series=ALL&dateRange=+&fromDate=12-07-2017&toDate=12-07-2018&dataType=PRICEVOLUMEDELIVERABLE
+#{"symbol":"maruti","segmentLink":3,"symbolCount":2,"series":"ALL","dateRange":"+","fromDate":"12-07-2017","toDate":"12-07-2018","dataType":"PRICEVOLUMEDELIVERABEL}
